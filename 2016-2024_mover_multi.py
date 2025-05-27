@@ -58,13 +58,15 @@ def extract_folder(args):
 
 def process_folder(args):
     """XML 파일 정리만 담당하는 함수"""
-    src_folder, dest_base, folder = args
+    src_folder, dest_base, folder, existing_files = args
     folder_path = os.path.join(src_folder, folder)
     
     if not os.path.isdir(folder_path):
         return 0
 
     moved = 0
+    skipped = 0
+    
     # 재귀적으로 xml 파일 찾기 (하위 폴더까지 모두 검색, 대소문자 구분 없음)
     xml_files = []
     for root, _, files in os.walk(folder_path):
@@ -72,26 +74,37 @@ def process_folder(args):
             if file.lower().endswith('.xml'):
                 xml_files.append(os.path.join(root, file))
     
-    print(f"{folder}: Found {len(xml_files)} XML files")
+    print(f"{folder}: Found {len(xml_files)} XML files to process")
     
     for src_file in xml_files:
         try:
             file_name = os.path.basename(src_file)
             name_without_ext, _ = os.path.splitext(file_name)
             subfolder = name_without_ext[:8]  # 날짜(YYYYMMDD)
+            year_folder = subfolder[:4]       # 연도(YYYY)
 
-            dest_dir = os.path.join(dest_base, subfolder)
+            # 대상 파일의 상대 경로 생성
+            dest_rel_path = os.path.join(year_folder, subfolder, file_name)
+            
+            # 메모리에 캐시된 파일 목록에서 확인
+            if dest_rel_path in existing_files:
+                skipped += 1
+                if skipped % 100 == 0:
+                    print(f"{folder}: Skipped {skipped} files so far...")
+                continue
+
+            dest_dir = os.path.join(dest_base, year_folder, subfolder)
             os.makedirs(dest_dir, exist_ok=True)
-
             dest_file = os.path.join(dest_dir, file_name)
+            
             shutil.move(src_file, dest_file)
             moved += 1
-            if moved % 100 == 0:  # 100개마다 진행상황 출력
+            if moved % 100 == 0:
                 print(f"{folder}: Moved {moved} files so far...")
         except Exception as e:
             print(f"Error moving {src_file}: {str(e)}")
 
-    print(f"{folder}: Moved {moved} files")
+    print(f"{folder}: Moved {moved} files, Skipped {skipped} files")
     return moved
 
 def main():
@@ -146,13 +159,24 @@ def main():
         print("\n=== XML 파일 정리 시작 ===")
         print(f"소스 폴더: {args.src}")
         print(f"대상 폴더: {args.dest}")
+        
+        # 대상 폴더의 파일 목록을 한 번만 로드
+        print("대상 폴더의 파일 목록을 로드하는 중...")
+        existing_files = set()
+        for root, _, files in os.walk(args.dest):
+            for file in files:
+                if file.lower().endswith('.xml'):
+                    rel_path = os.path.relpath(os.path.join(root, file), args.dest)
+                    existing_files.add(rel_path)
+        print(f"대상 폴더에서 {len(existing_files)}개의 XML 파일을 찾았습니다.")
+        
         # 압축 해제된 폴더만 찾기
         folders = [f for f in os.listdir(args.src) 
                   if os.path.isdir(os.path.join(args.src, f))]
         print(f"총 {len(folders)}개 폴더 정리 예정")
         
-        # 파일 정리 작업
-        organize_args = [(args.src, args.dest, folder) for folder in folders]
+        # 파일 정리 작업 (existing_files를 각 프로세스에 전달)
+        organize_args = [(args.src, args.dest, folder, existing_files) for folder in folders]
         with Pool(processes=num_processes) as pool:
             organize_results = pool.map(process_folder, organize_args)
         
